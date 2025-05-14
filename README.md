@@ -35,7 +35,17 @@ Or to only display the files that would be processed:
 ```bash
 python py/test_HeadDetector.py ./images --dry_run
 ```
+### Example Input and Output
 
+Suppose you have an input image `input/1.png`. After running the tool, the cropped result will be saved as `output/1.png`.
+
+**Input:**  
+`input/1.png`  
+![https://github.com/locke12456/AnimeHeadDetector/blob/main/input/1.png?raw=true](https://github.com/locke12456/AnimeHeadDetector/blob/main/input/1.png?raw=true)
+
+**Output:**  
+`output/1.png`  
+![https://github.com/locke12456/AnimeHeadDetector/blob/main/output/1.png?raw=true](https://github.com/locke12456/AnimeHeadDetector/blob/main/output/1.png?raw=true)
 ## Notes
 
 - Make sure `HeadDetector.py` is correctly placed in the `py` folder.
