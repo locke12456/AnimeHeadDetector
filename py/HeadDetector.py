@@ -43,6 +43,41 @@ class HeadDetector:
             return cropped, image
         return None, image
 
+    def force_rect_crop(self, image_path, result, rect_width, rect_height):
+        img = Image.open(image_path)
+        image = os.path.basename(image_path)
+
+        if result:
+            best_det = max(result, key=lambda det: det[1] if isinstance(det, tuple) else det.get('score', 0))
+            bbox = best_det[0] if isinstance(best_det, tuple) else best_det['bbox']
+            x1, y1, x2, y2 = map(int, bbox)
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+
+            # 計算crop區域，確保不超出圖片邊界
+            nx1 = max(0, min(img.width - rect_width, cx - rect_width // 2))
+            ny1 = max(0, min(img.height - rect_height, cy - rect_height // 2))
+            nx2 = nx1 + rect_width
+            ny2 = ny1 + rect_height
+
+            # 修正右下角超界
+            if nx2 > img.width:
+                nx2 = img.width
+                nx1 = img.width - rect_width
+            if ny2 > img.height:
+                ny2 = img.height
+                ny1 = img.height - rect_height
+
+            cropped = img.crop((nx1, ny1, nx2, ny2))
+            return cropped, image
+        return None, image
+    def DetectAndForceRectCrop(self, image_path, rect):
+        result = self.detect(image_path)
+        cropped, image = self.force_rect_crop(image_path, result, rect, rect)
+        if cropped:
+            self.save_image(cropped, image)
+        print(result)
+        return cropped
     def DetectAndCrop(self, image_path):
         result = self.detect(image_path)
         cropped, image = self.crop(image_path, result)
