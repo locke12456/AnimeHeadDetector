@@ -1,2 +1,2 @@
-imgutils==0.1.2
+dghs-imgutils
 Pillow==11.2.1
