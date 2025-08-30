@@ -18,6 +18,7 @@ if __name__ == "__main__":
     
     parser.add_argument('--dry_run', action='store_true', help='Dry run, do not save cropped images')
     parser.add_argument('--force_rect_crop', action='store_true', help='Force rectangular crop')
+    # python.exe .\py\test_HeadDetector.py -f "path to images" -o .\out --mask --blur_size 32     
     args = parser.parse_args()
 
     folder = args.folder_name_opt or args.folder_name
@@ -26,6 +27,7 @@ if __name__ == "__main__":
     dry_run = args.dry_run
 
     for img_path in glob.glob(os.path.join(folder, '*.png')):
+        img_path = img_path.replace("PNG", "png")
         if dry_run:
             print(f"Would process: {img_path}")
         else:
