@@ -1,8 +1,10 @@
 import argparse
 import glob, os, sys
-sys.path.insert(0, os.path.abspath("./py"))
-from HeadDetector import HeadDetector
-from CensorDetector import CensorDetector
+
+
+from .HeadDetector import HeadDetector
+from .CensorDetector import CensorDetector
+
 #..\..\python_embeded\python.exe .\py\detector.py --mode head -f "E:\code\dev\AI\productions\games\ero\piexl\Galahad\release\01" -o .\out2 --mask --blur_size 32  
 #..\..\python_embeded\python.exe .\py\detector.py --mode censor -f "E:\code\dev\AI\productions\games\ero\piexl\Galahad\release\01" --filter penis -o .\out3 --mask --blur_size 32
 if __name__ == "__main__":
@@ -12,12 +14,16 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', type=str, default='output')
     parser.add_argument('--width', type=int, default=260)
     parser.add_argument('--height', type=int, default=340)
+    parser.add_argument('--resize', action='store_true')
+    parser.add_argument('--bg', type=str, default=None, help='Background image for cropping')
     parser.add_argument('--filter', type=str, help='Censor filter label')
     parser.add_argument('-d', '--dry_run', action='store_true')
     parser.add_argument('--force_rect_crop', action='store_true')
     parser.add_argument('-m', '--mask', action='store_true')
     parser.add_argument('-b', '--blur_size', type=int, default=10)
     parser.add_argument('--info', action='store_true')
+    # [新增] --top_n 參數
+    parser.add_argument('--top_n', type=int, default=3, help='Number of detections to process')
     args = parser.parse_args()
 
     folder = args.folder
@@ -36,15 +42,18 @@ if __name__ == "__main__":
                 print(f"Would save mask to: {os.path.join(output, mask_name)}")
             else:
                 if args.force_rect_crop:
-                    detector.DetectAndForceRectCrop(img_path, width)
+                    detector.DetectAndForceRectCrop(img_path, width, resize=args.resize, bg_path=args.bg)
+                # [修改] mask 模式改用迴圈處理多個 bbox
                 elif args.mask:
-                    bbox = detector.Detect(img_path)
-                    masked, mask, info = detector.create_blurred_mask(img_path, bbox, args.blur_size)
-                    if mask is not None:
-                        detector.Crop(img_path, info.origin_rect.to_tuple(), info.rect_filename)
-                        detector.save_image(mask, info.mask_name)
-                        if args.info:
-                            info.save_to_file(os.path.join(output, f'{info.filename}.json'))
+                    result = detector.detect(img_path)
+                    bboxes = detector.get_top_rects(result, top_n=args.top_n if hasattr(args, 'top_n') else 3)
+                    for idx, bbox in enumerate(bboxes, start=1):
+                        masked, mask, info = detector.create_blurred_mask(img_path, bbox, args.blur_size, index=idx)
+                        if mask is not None:
+                            detector.Crop(img_path, info.origin_rect.to_tuple(), info.rect_filename)
+                            detector.save_image(mask, info.mask_name)
+                            if args.info:
+                                info.save_to_file(os.path.join(output, f'{info.filename}.json'))
                 else:
                     _, img, bbox = detector.DetectAndCrop(img_path)
     elif args.mode == 'censor':
@@ -66,13 +75,16 @@ if __name__ == "__main__":
                     if args.force_rect_crop:
                         cropped, image = detector.force_rect_crop(img_path, best, width, height)
                         detector.save_image(cropped, image)
+                    # [修改] mask 模式改用迴圈處理多個 bbox
                     elif args.mask:
-                        masked, mask, info = detector.create_blurred_mask(img_path, bbox, args.blur_size)
-                        if mask is not None:
-                            detector.Crop(img_path, info.origin_rect.to_tuple(), info.rect_filename)
-                            detector.save_image(mask, info.mask_name)
-                            if args.info:
-                                info.save_to_file(os.path.join(output, f'{info.filename}.json'))
+                        bboxes = detector.get_top_rects(best, filter_label=args.filter, top_n=args.top_n if hasattr(args, 'top_n') else 3)
+                        for idx, bbox in enumerate(bboxes, start=1):
+                            masked, mask, info = detector.create_blurred_mask(img_path, bbox, args.blur_size, index=idx)
+                            if mask is not None:
+                                detector.Crop(img_path, info.origin_rect.to_tuple(), info.rect_filename)
+                                detector.save_image(mask, info.mask_name)
+                                if args.info:
+                                    info.save_to_file(os.path.join(output, f'{info.filename}.json'))
                     else:
                         cropped, image, bbox = detector.crop(img_path, best)
                         detector.save_image(cropped, image)

@@ -1,6 +1,6 @@
 import argparse
 import glob, os, sys
-sys.path.insert(0, os.path.abspath("./py"))
+
 from HeadDetector import HeadDetector
 
 if __name__ == "__main__":

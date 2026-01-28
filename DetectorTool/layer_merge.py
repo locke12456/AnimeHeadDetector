@@ -2,8 +2,10 @@ import argparse
 import os
 import json
 import sys
+import re
 from PIL import Image
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set
+
 
 class ImageProcessor:
     def __init__(self, input_dir: str, layers: List[str], output_dir: str, verbose: bool = False):
@@ -18,7 +20,7 @@ class ImageProcessor:
         structure = {
             'origin_path': None,
             'layer_paths': {},
-            'available_images': set()
+            'available_images': {}
         }
         
         if self.verbose:
@@ -30,10 +32,11 @@ class ImageProcessor:
                 if item == 'origin':
                     structure['origin_path'] = item_path
                     # 取得所有原始圖片的基礎名稱
+                    image_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
                     for img in os.listdir(item_path):
-                        if img.endswith('.PNG'):
-                            base_name = img.replace('.PNG', '')
-                            structure['available_images'].add(base_name)
+                        if img.lower().endswith(image_extensions):
+                            base_name = os.path.splitext(img)[0]
+                            structure['available_images'][base_name] = img
                 elif item in self.layers:
                     structure['layer_paths'][item] = item_path
                     if self.verbose:
@@ -44,25 +47,46 @@ class ImageProcessor:
                     
         return structure
     
+    # [新增] 從 base_filename 提取原始圖片名稱
+    def _extract_original_base_name(self, base_filename: str) -> str:
+        """從包含 _1, _2 後綴的 base_filename 提取原始圖片名稱
+        
+        範例:
+        - 'soapland 01_1' -> 'soapland 01'
+        - 'soapland 01_2' -> 'soapland 01'
+        - 'soapland 01' -> 'soapland 01' (無後綴則不變)
+        """
+        # 匹配結尾的 _\d+ 模式
+        match = re.match(r'^(.+)_(\d+)$', base_filename)
+        if match:
+            return match.group(1)
+        return base_filename
+    
+    # [修改] mapping 結構改為 list 支援多結果，使用原始圖片名稱作為 key
     def get_layer_image_mapping(self, layer_name: str) -> Dict:
         """取得該 layer 中所有可用的圖片映射"""
         layer_path = self.folder_structure['layer_paths'].get(layer_name)
         if not layer_path:
             return {}
             
-        mapping = {}
+        mapping = {}  # original_base_name -> list of configs
         for file in os.listdir(layer_path):
             if file.endswith('.json'):
                 config_path = os.path.join(layer_path, file)
                 try:
                     with open(config_path, 'r', encoding='utf-8') as f:
                         config = json.load(f)
-                    base_name = config['base_filename']
-                    mapping[base_name] = {
+                    # [修改] 提取原始圖片名稱
+                    raw_base_name = config['base_filename']
+                    original_base_name = self._extract_original_base_name(raw_base_name)
+                    
+                    if original_base_name not in mapping:
+                        mapping[original_base_name] = []
+                    mapping[original_base_name].append({
                         'config': config,
                         'config_path': config_path,
                         'layer_path': layer_path
-                    }
+                    })
                 except Exception as e:
                     print(f"讀取配置檔案錯誤 {file}: {e}")
                     
@@ -97,6 +121,7 @@ class ImageProcessor:
             
         return processed_layers
     
+    # [修改] 雙層迴圈處理每個結果
     def _process_layer(self, layer_name: str, layer_mapping: Dict) -> Set[str]:
         """處理單一 layer"""
         output_layer_dir = os.path.join(self.output_dir, layer_name)
@@ -104,26 +129,23 @@ class ImageProcessor:
         
         processed_images = set()
         
-        for base_name, mapping_info in layer_mapping.items():
-            config = mapping_info['config']
-            layer_path = mapping_info['layer_path']
-            
-            # 檢查對應的 origin 圖片是否存在
-            origin_image_path = os.path.join(
-                self.folder_structure['origin_path'], 
-                f"{base_name}.PNG"
-            )
-            
-            if not os.path.exists(origin_image_path):
-                print(f"  警告: 找不到原始圖片 {base_name}")
-                continue
+        for base_name, mapping_list in layer_mapping.items():  # 現在是 list
+            for mapping_info in mapping_list:  # 迴圈處理每個結果
+                config = mapping_info['config']
+                layer_path = mapping_info['layer_path']
                 
-            if self.verbose:
-                print(f"  處理 {base_name}")
+                # 檢查對應的 origin 圖片是否存在
+                origin_filename = self.folder_structure['available_images'].get(base_name)
+                if not origin_filename:
+                    print(f"  警告: 找不到原始圖片 {base_name}")
+                    continue
                 
-            success = self._process_image_with_config(layer_path, config, output_layer_dir)
-            if success:
-                processed_images.add(base_name)
+                if self.verbose:
+                    print(f"  處理 {config['filename']}")
+                    
+                success = self._process_image_with_config(layer_path, config, output_layer_dir)
+                if success:
+                    processed_images.add(base_name)
                 
         print(f"圖層 {layer_name} 處理完成: {len(processed_images)} 張圖片")
         return processed_images
@@ -147,7 +169,7 @@ class ImageProcessor:
                 return False
                 
             # 處理圖片
-            output_path = os.path.join(output_dir, f"{config['base_filename']}_processed.png")
+            output_path = os.path.join(output_dir, f"{config['filename']}_processed.png")
             self._adjust_and_apply_mask(image_path, mask_path, config, output_path)
             
             if self.verbose:
@@ -216,15 +238,13 @@ class ImageProcessor:
         print(f"  跳過: {skipped_count} 張")
         print(f"  總計: {total_images} 張")
     
+    # [修改] 匹配 _1, _2, _3 等多個結果並合併
     def _merge_layers_for_image(self, base_name: str, processed_layers: Dict[str, Set[str]], output_dir: str) -> bool:
         """為單張圖片進行圖層合成"""
         try:
             # 1. 載入 origin 圖片作為底圖
-            origin_path = os.path.join(self.folder_structure['origin_path'], f"{base_name}.PNG")
-            if not os.path.exists(origin_path):
-                print(f"  跳過 {base_name}: 找不到原始圖片")
-                return False
-                
+            origin_filename = self.folder_structure['available_images'][base_name]
+            origin_path = os.path.join(self.folder_structure['origin_path'], origin_filename)
             base_image = Image.open(origin_path).convert("RGBA")
             base_w, base_h = base_image.size
             
@@ -240,27 +260,21 @@ class ImageProcessor:
                     if self.verbose:
                         print(f"    跳過 layer{i} ({layer}): 圖片沒有此圖層")
                     continue
-                    
-                # 載入處理過的圖層圖片
-                layer_image_path = os.path.join(self.output_dir, layer, f"{base_name}_processed.png")
                 
-                if not os.path.exists(layer_image_path):
-                    if self.verbose:
-                        print(f"    跳過 layer{i} ({layer}): 找不到處理後的圖片")
-                    continue
-                    
-                layer_image = Image.open(layer_image_path).convert("RGBA")
+                # 找出所有處理過的檔案（包含 _1, _2, _3 等）
+                layer_output_dir = os.path.join(self.output_dir, layer)
+                pattern = f"{base_name}_"  # 匹配 base_name_ 開頭的檔案
                 
-                # 調整圖層尺寸以匹配 origin
-                if layer_image.size != (base_w, base_h):
-                    layer_image = layer_image.resize((base_w, base_h), Image.Resampling.LANCZOS)
-                
-                # 合成到底圖上
-                base_image = Image.alpha_composite(base_image, layer_image)
-                applied_layers.append(f"layer{i}({layer})")
-                
-                if self.verbose:
-                    print(f"    已套用 layer{i} ({layer})")
+                for file in os.listdir(layer_output_dir):
+                    if file.startswith(pattern) and file.endswith('_processed.png'):
+                        layer_image_path = os.path.join(layer_output_dir, file)
+                        layer_image = Image.open(layer_image_path).convert("RGBA")
+                        
+                        if layer_image.size != (base_w, base_h):
+                            layer_image = layer_image.resize((base_w, base_h), Image.Resampling.LANCZOS)
+                        
+                        base_image = Image.alpha_composite(base_image, layer_image)
+                        applied_layers.append(f"{layer}/{file}")
             
             # 3. 儲存最終合成結果
             if applied_layers:
@@ -273,10 +287,11 @@ class ImageProcessor:
             else:
                 print(f"  ⚠️ {base_name}: 沒有可用的圖層，跳過合成")
                 return False
-                
+            
         except Exception as e:
             print(f"  ❌ {base_name}: 合成失敗 - {e}")
             return False
+
 
 def parse_arguments():
     """命令列參數解析 - Windows 修復版本"""
@@ -295,8 +310,7 @@ def parse_arguments():
         prog='layer_merge.py',
         description='圖片圖層處理和合成工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-使用範例:
+        epilog='''使用範例:
   python layer_merge.py -i "need fix" --layers pussy penis head -o output --dry-run
   python layer_merge.py --layers head pussy -i input_folder -o output_folder --verbose
   python layer_merge.py -i "path/to/images" --layers head -o output --debug
@@ -357,8 +371,8 @@ def parse_arguments():
         args = parser.parse_args()
         
         # 正規化路徑，解決 Windows 反斜線問題
-        args.input = os.path.normpath(args.input.rstrip('\\\\').rstrip('/'))
-        args.output = os.path.normpath(args.output.rstrip('\\\\').rstrip('/'))
+        args.input = os.path.normpath(args.input.rstrip('\\').rstrip('/'))
+        args.output = os.path.normpath(args.output.rstrip('\\').rstrip('/'))
         
         if args.debug:
             print("=== 除錯: 解析後的參數 ===")
@@ -379,6 +393,7 @@ def parse_arguments():
         print("或者：")
         print('python layer_merge.py --layers head pussy penis -i "need fix" -o output --dry-run')
         raise
+
 
 def validate_input_structure(input_dir: str, layers: List[str]) -> bool:
     """驗證輸入資料夾結構"""
@@ -403,7 +418,8 @@ def validate_input_structure(input_dir: str, layers: List[str]) -> bool:
         return False
         
     # 檢查圖片數量
-    origin_images = [f for f in os.listdir(origin_path) if f.endswith('.PNG')]
+    image_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+    origin_images = [f for f in os.listdir(origin_path) if f.lower().endswith(image_extensions)]
     print(f"📁 origin 資料夾: {len(origin_images)} 張圖片")
     
     # 檢查指定的 layer 資料夾
@@ -439,6 +455,7 @@ def validate_input_structure(input_dir: str, layers: List[str]) -> bool:
         print(f"✅ 所有指定的圖層資料夾都存在: {available_layers}")
     
     return True
+
 
 def main():
     """主程式"""
@@ -513,6 +530,7 @@ def main():
             import traceback
             traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
